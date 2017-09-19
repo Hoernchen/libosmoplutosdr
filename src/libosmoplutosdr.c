@@ -47,7 +47,8 @@
 #define PLUTO_CTL_OUT (LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_ENDPOINT_OUT | LIBUSB_RECIPIENT_INTERFACE)
 #define PLUTO_CTL_IN (LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_ENDPOINT_IN | LIBUSB_RECIPIENT_INTERFACE)
 
-#define PLUTO_CTLTSZ 128
+//linux doesn't like the windows limit of 4096
+#define PLUTO_CTLTSZ 2048
 enum plutoctl_commands {
     ENABLE_BUFSTREAM=0,
     GLOBALPHYSTORE,
@@ -55,6 +56,7 @@ enum plutoctl_commands {
     HWGAIN,     // milli-db!
     SAMPFREQ,
     GAINCTLMODE,    // always manual.
+    SETFIRCOEFF
 };
 
 
@@ -85,6 +87,7 @@ struct plutosdr_dev {
 
     //buf for ctrl transfers
     unsigned char ctrlbuf[PLUTO_CTLTSZ];
+    unsigned int bb_rate_cache;
 };
 
 
@@ -475,6 +478,64 @@ int plutosdr_cancel_async(plutosdr_dev_t *dev)
 	return -2;
 }
 
+static int16_t fir_128_4[] = {
+	-15,-27,-23,-6,17,33,31,9,-23,-47,-45,-13,34,69,67,21,-49,-102,-99,-32,69,146,143,48,-96,-204,-200,-69,129,278,275,97,-170,
+	-372,-371,-135,222,494,497,187,-288,-654,-665,-258,376,875,902,363,-500,-1201,-1265,-530,699,1748,1906,845,-1089,-2922,-3424,
+	-1697,2326,7714,12821,15921,15921,12821,7714,2326,-1697,-3424,-2922,-1089,845,1906,1748,699,-530,-1265,-1201,-500,363,902,875,
+	376,-258,-665,-654,-288,187,497,494,222,-135,-371,-372,-170,97,275,278,129,-69,-200,-204,-96,48,143,146,69,-32,-99,-102,-49,21,
+	67,69,34,-13,-45,-47,-23,9,31,33,17,-6,-23,-27,-15 };
+
+char firstring[] = "RX 3 GAIN -6 DEC 4\nTX 3 GAIN 0 INT 4\n-15,-15\n-27,-27\n-23,-23\n-6,-6\n17,17\n33,33\n31,31\n9,9\n-23,-23\n-47,-47\n-45,-45\n-13,-13\n34,34\n69,69\n67,67\n21,21\n-49,-49\n-102,-102\n-99,-99\n-32,-32\n69,69\n146,146\n143,143\n48,48\n-96,-96\n-204,-204\n-200,-200\n-69,-69\n129,129\n278,278\n275,275\n97,97\n-170,-170\n-372,-372\n-371,-371\n-135,-135\n222,222\n494,494\n497,497\n187,187\n-288,-288\n-654,-654\n-665,-665\n-258,-258\n376,376\n875,875\n902,902\n363,363\n-500,-500\n-1201,-1201\n-1265,-1265\n-530,-530\n699,699\n1748,1748\n1906,1906\n845,845\n-1089,-1089\n-2922,-2922\n-3424,-3424\n-1697,-1697\n2326,2326\n7714,7714\n12821,12821\n15921,15921\n15921,15921\n12821,12821\n7714,7714\n2326,2326\n-1697,-1697\n-3424,-3424\n-2922,-2922\n-1089,-1089\n845,845\n1906,1906\n1748,1748\n699,699\n-530,-530\n-1265,-1265\n-1201,-1201\n-500,-500\n363,363\n902,902\n875,875\n376,376\n-258,-258\n-665,-665\n-654,-654\n-288,-288\n187,187\n497,497\n494,494\n222,222\n-135,-135\n-371,-371\n-372,-372\n-170,-170\n97,97\n275,275\n278,278\n129,129\n-69,-69\n-200,-200\n-204,-204\n-96,-96\n48,48\n143,143\n146,146\n69,69\n-32,-32\n-99,-99\n-102,-102\n-49,-49\n21,21\n67,67\n69,69\n34,34\n-13,-13\n-45,-45\n-47,-47\n-23,-23\n9,9\n31,31\n33,33\n17,17\n-6,-6\n-23,-23\n-27,-27\n-15,-15\n\n";
+
+int ad9361_set_bb_rate(plutosdr_dev_t *dev, unsigned long rate)
+{
+	int ret, i,  len = 0;
+	char *buf = dev->ctrlbuf;
+
+
+
+	snprintf(dev->ctrlbuf, PLUTO_CTLTSZ, "%s=0", "in_out_voltage_filter_fir_en");
+	ret = libusb_control_transfer(dev->devh, PLUTO_CTL_OUT, 0xff, GLOBALPHYSTORE, 0x1234, dev->ctrlbuf, PLUTO_CTLTSZ, 0);
+	fprintf(stderr, "ctl %d %s req was:%s\n", ret, ret < 0 ? libusb_strerror(ret) : "fine", dev->ctrlbuf);
+
+	//memset(buf, 0, PLUTO_CTLTSZ);
+
+	//len += snprintf(buf + len, PLUTO_CTLTSZ - len, "RX 3 GAIN -6 DEC %d\n", 4);
+	//len += snprintf(buf + len, PLUTO_CTLTSZ - len, "TX 3 GAIN 0 INT %d\n", 4);
+
+	//for (i = 0; i < 128; i++)
+	//	len += snprintf(buf + len, PLUTO_CTLTSZ - len, "%d,%d\n", fir_128_4[i], fir_128_4[i]);
+
+	//len += snprintf(buf + len, PLUTO_CTLTSZ - len, "\n");
+
+	//fprintf(stderr, "fir len: %d:%s\n", len, buf);
+
+
+
+	plutosdr_set_fir_coeff(dev, firstring);
+
+	if (rate <= (25000000 / 12)) {
+		snprintf(dev->ctrlbuf, PLUTO_CTLTSZ, "%s=1", "in_out_voltage_filter_fir_en");
+		ret = libusb_control_transfer(dev->devh, PLUTO_CTL_OUT, 0xff, GLOBALPHYSTORE, 0x1234, dev->ctrlbuf, PLUTO_CTLTSZ, 0);
+		fprintf(stderr, "ctl %d %s req was:%s\n", ret, ret < 0 ? libusb_strerror(ret) : "fine", dev->ctrlbuf);
+
+		snprintf(dev->ctrlbuf, PLUTO_CTLTSZ, "%d", rate);
+		ret = libusb_control_transfer(dev->devh, PLUTO_CTL_OUT, 0xff, SAMPFREQ, 0x1234, dev->ctrlbuf, PLUTO_CTLTSZ, 0);
+		fprintf(stderr, "ctl %d %s req was:%s\n", ret, ret < 0 ? libusb_strerror(ret) : "fine", dev->ctrlbuf);
+	}
+	else {
+		snprintf(dev->ctrlbuf, PLUTO_CTLTSZ, "%d", rate);
+		ret = libusb_control_transfer(dev->devh, PLUTO_CTL_OUT, 0xff, SAMPFREQ, 0x1234, dev->ctrlbuf, PLUTO_CTLTSZ, 0);
+		fprintf(stderr, "ctl %d %s req was:%s\n", ret, ret < 0 ? libusb_strerror(ret) : "fine", dev->ctrlbuf);
+
+		snprintf(dev->ctrlbuf, PLUTO_CTLTSZ, "%s=1", "in_out_voltage_filter_fir_en");
+		ret = libusb_control_transfer(dev->devh, PLUTO_CTL_OUT, 0xff, GLOBALPHYSTORE, 0x1234, dev->ctrlbuf, PLUTO_CTLTSZ, 0);
+		fprintf(stderr, "ctl %d %s req was:%s\n", ret, ret < 0 ? libusb_strerror(ret) : "fine", dev->ctrlbuf);
+			return ret;
+	}
+
+	return 0;
+}
 
 void plutosdr_bufstream_enable(plutosdr_dev_t *dev, uint32_t enable){
     int ret;
@@ -482,12 +543,28 @@ void plutosdr_bufstream_enable(plutosdr_dev_t *dev, uint32_t enable){
     dev->ctrlbuf[1] = 0;
     ret = libusb_control_transfer(dev->devh, PLUTO_CTL_OUT, 0xff, ENABLE_BUFSTREAM, 0x1234, dev->ctrlbuf, PLUTO_CTLTSZ, 0);
     fprintf(stderr,"ctl %d %s req was:%s\n", ret, ret < 0 ? libusb_strerror(ret) : "fine",  dev->ctrlbuf);
+
+    snprintf(dev->ctrlbuf, PLUTO_CTLTSZ, "%s=1", "in_voltage_bb_dc_offset_tracking_en");
+    ret = libusb_control_transfer(dev->devh, PLUTO_CTL_OUT, 0xff, GLOBALPHYSTORE, 0x1234, dev->ctrlbuf, PLUTO_CTLTSZ, 0);
+    fprintf(stderr, "ctl %d %s req was:%s\n", ret, ret < 0 ? libusb_strerror(ret) : "fine", dev->ctrlbuf);
+
+    snprintf(dev->ctrlbuf, PLUTO_CTLTSZ, "%s=1", "in_voltage_rf_dc_offset_tracking_en");
+    ret = libusb_control_transfer(dev->devh, PLUTO_CTL_OUT, 0xff, GLOBALPHYSTORE, 0x1234, dev->ctrlbuf, PLUTO_CTLTSZ, 0);
+    fprintf(stderr, "ctl %d %s req was:%s\n", ret, ret < 0 ? libusb_strerror(ret) : "fine", dev->ctrlbuf);
+
+    snprintf(dev->ctrlbuf, PLUTO_CTLTSZ, "%s=1", "in_voltage_quadrature_tracking_en");
+    ret = libusb_control_transfer(dev->devh, PLUTO_CTL_OUT, 0xff, GLOBALPHYSTORE, 0x1234, dev->ctrlbuf, PLUTO_CTLTSZ, 0);
+    fprintf(stderr, "ctl %d %s req was:%s\n", ret, ret < 0 ? libusb_strerror(ret) : "fine", dev->ctrlbuf);
 }
 
 void plutosdr_set_rfbw(plutosdr_dev_t *dev, uint32_t rfbw_hz){
     int ret;
     //ad9361_phy_store
-    snprintf(dev->ctrlbuf, 64, "%s=%d", "in_voltage_rf_bandwidth", rfbw_hz);
+
+    if (rfbw_hz == 0)
+        rfbw_hz = dev->bb_rate_cache;
+
+    snprintf(dev->ctrlbuf, PLUTO_CTLTSZ, "%s=%d", "in_voltage_rf_bandwidth", rfbw_hz);
     ret = libusb_control_transfer(dev->devh, PLUTO_CTL_OUT, 0xff, GLOBALPHYSTORE, 0x1234, dev->ctrlbuf, PLUTO_CTLTSZ, 0);
     fprintf(stderr,"ctl %d %s req was:%s\n", ret, ret < 0 ? libusb_strerror(ret) : "fine",  dev->ctrlbuf);
 }
@@ -495,15 +572,17 @@ void plutosdr_set_rfbw(plutosdr_dev_t *dev, uint32_t rfbw_hz){
 void plutosdr_set_sample_rate(plutosdr_dev_t *dev, uint32_t sampfreq_hz){
     int ret;
     //samplefreq
-    snprintf(dev->ctrlbuf, 64, "%d", sampfreq_hz);
-    ret = libusb_control_transfer(dev->devh, PLUTO_CTL_OUT, 0xff, SAMPFREQ, 0x1234, dev->ctrlbuf, PLUTO_CTLTSZ, 0);
-    fprintf(stderr,"ctl %d %s req was:%s\n", ret, ret < 0 ? libusb_strerror(ret) : "fine",  dev->ctrlbuf);
+    //snprintf(dev->ctrlbuf, PLUTO_CTLTSZ, "%d", sampfreq_hz);
+    //ret = libusb_control_transfer(dev->devh, PLUTO_CTL_OUT, 0xff, SAMPFREQ, 0x1234, dev->ctrlbuf, PLUTO_CTLTSZ, 0);
+    //fprintf(stderr,"ctl %d %s req was:%s\n", ret, ret < 0 ? libusb_strerror(ret) : "fine",  dev->ctrlbuf);
+	dev->bb_rate_cache = sampfreq_hz;
+	ad9361_set_bb_rate(dev, sampfreq_hz);
 }
 
 void plutosdr_set_rxlo(plutosdr_dev_t *dev, uint64_t rfbw_hz){
     int ret;
     //RX_LO
-    snprintf(dev->ctrlbuf, 64, "%s=%llu", "frequency", rfbw_hz);
+    snprintf(dev->ctrlbuf, PLUTO_CTLTSZ, "%s=%llu", "frequency", rfbw_hz);
     ret = libusb_control_transfer(dev->devh, PLUTO_CTL_OUT, 0xff, RXLO, 0x1234, dev->ctrlbuf, PLUTO_CTLTSZ, 0);
     fprintf(stderr,"ctl %d %s req was:%s\n", ret, ret < 0 ? libusb_strerror(ret) : "fine",  dev->ctrlbuf);
 }
@@ -511,7 +590,7 @@ void plutosdr_set_rxlo(plutosdr_dev_t *dev, uint64_t rfbw_hz){
 void plutosdr_set_gainctl_manual(plutosdr_dev_t *dev){
     int ret;
     //gain control mode
-    snprintf(dev->ctrlbuf, 64, "%s=%s", "gain_control_mode", "manual");
+    snprintf(dev->ctrlbuf, PLUTO_CTLTSZ, "%s=%s", "gain_control_mode", "manual");
     ret = libusb_control_transfer(dev->devh, PLUTO_CTL_OUT, 0xff, GAINCTLMODE, 0x1234, dev->ctrlbuf, PLUTO_CTLTSZ, 0);
     fprintf(stderr,"ctl %d %s req was:%s\n", ret, ret < 0 ? libusb_strerror(ret) : "fine",  dev->ctrlbuf);
 }
@@ -519,7 +598,21 @@ void plutosdr_set_gainctl_manual(plutosdr_dev_t *dev){
 void plutosdr_set_gain_mdb(plutosdr_dev_t *dev, int32_t gain_in_millib){
     int ret;
     //hw gain in milli-dB
-    snprintf(dev->ctrlbuf, 64, "%d", gain_in_millib);
+    snprintf(dev->ctrlbuf, PLUTO_CTLTSZ, "%d", gain_in_millib);
     ret = libusb_control_transfer(dev->devh, PLUTO_CTL_OUT, 0xff, HWGAIN, 0x1234, dev->ctrlbuf, PLUTO_CTLTSZ, 0);
     fprintf(stderr,"ctl %d %s req was:%s\n", ret, ret < 0 ? libusb_strerror(ret) : "fine",  dev->ctrlbuf);
+}
+
+void plutosdr_set_fir_coeff(plutosdr_dev_t *dev, char* buf) {
+	int ret;
+
+	if (strlen(buf)+1 > PLUTO_CTLTSZ) {
+		fprintf(stderr, "err: fir coeff too long!");
+		return;
+	}
+
+	//dev->ctrlbuf[PLUTO_CTLTSZ - 1] = 0;
+	strncpy(dev->ctrlbuf, buf, PLUTO_CTLTSZ - 1);
+	ret = libusb_control_transfer(dev->devh, PLUTO_CTL_OUT, 0xff, SETFIRCOEFF, 0x1234, dev->ctrlbuf, PLUTO_CTLTSZ, 0);
+	fprintf(stderr, "ctl %d %s req was:%s\n", ret, ret < 0 ? libusb_strerror(ret) : "fine", "fir filter coeff");
 }

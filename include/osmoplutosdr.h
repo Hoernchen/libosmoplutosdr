@@ -44,6 +44,7 @@ PLUTOSDR_API void plutosdr_set_sample_rate(plutosdr_dev_t* dev, uint32_t sampfre
 PLUTOSDR_API void plutosdr_set_rxlo(plutosdr_dev_t* dev, uint64_t rfbw_hz);
 PLUTOSDR_API void plutosdr_set_gainctl_manual(plutosdr_dev_t* dev);
 PLUTOSDR_API void plutosdr_set_gain_mdb(plutosdr_dev_t* dev, int32_t gain_in_millib);
+PLUTOSDR_API void plutosdr_set_fir_coeff(plutosdr_dev_t *dev, char* buf);
 
 #ifdef __cplusplus
 }
